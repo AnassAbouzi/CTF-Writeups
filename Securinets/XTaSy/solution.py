@@ -45,7 +45,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s :
     0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 8 9 a b c d e f
     { " u s e r n a m e " :   " a " ,   " p a s s w o r d " :   " a a a a a a a a a a a a a a a a a :   1 } s s s s s s s s s s s s 0 0 " ,   " a d m i n " :   0 }
     we should note that we can't control the value of the sufix bytes so the values s might be characteres that get escaped so we should just keep trying until the
-    attack works, according to chatgpt there is 34 bytes out of 256 that are escaped by json.dumps(x, ensure_ascii=False) so the probability of success of the 
+    attack works, there are 34 bytes out of 256 that are escaped by json.dumps(x, ensure_ascii=False) so the probability of success of the 
     attack is approximatly (1 - (34 / 256))**12 = 0.19 so 1 in 10 tries should get you the flag
     """
     padding_pwd = "61616161616161616161616161616161613a20317d" + suffix + "00" * 2
