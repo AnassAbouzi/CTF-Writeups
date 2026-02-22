@@ -1,0 +1,26 @@
+for the first 4 blocks you follow these steps
+
+1) encrypt R | FLG_blk to get C1 | C2
+2) decrypt the value C2 | C1[ : -1] to get a value S
+this takes advantage of the ciphertext stealing mecanisme of AES-XTS and the value S we get is the decryption of C1[: -1] | FLG_blk[-1] 
+3) brute force the byte value : keep asking for the decryption of different values C1[: -1] | B for different values of B and compare the result to S. you get equality when B 
+corresponds to the correct flag byte
+4) use the same technique to get all but the first byte of the flag block (we need to have at least one byte on the last block to be able to take advantage of the ciphertext 
+stealing mecanisme) 
+
+for the last block its more tricky because it's not a full 16 byte block
+
+to recover it's bytes you follow these steps :
+1) encrypt R | FLG_blk to get C1 | C2
+because of ciphertext stealing C2 = enc(R)[ : 12] and C1 = enc(FLG_blk | enc(R[12 : ]))
+2) decrypt C1 | C2 to get R
+3) brute force the value of enc(R) (byte by byte) we do this by decrypting C1 | C2 | B for different values of B, we know we have the correct value of B when we get R from the the 
+decryption
+4) now that we have enc(R) we can brute force the last blk of the flag using a similar technique to the one we used for the earlier blocks
+5) decrypt the value C1 | C2[ :-1] to get a value S which corresponds to dec(enc(R)[ : 11] | FLG_blk[-1] | enc(R)[12:])
+6) since we have enc(R) we can brute force the value of the flag byte using S for output comparison
+7) using the same technique you can get all the bytes of the last block other than the first byte
+
+
+finally we have the hash of the flag so we can brute force the 5 different missing bytes (begining of each blk of the flag), the values inside the flag are all hex characteres 
+and the first one is obviously "s" right? (someone had the bright idea of making it S instead and waste about 3 hours of my time :D)
