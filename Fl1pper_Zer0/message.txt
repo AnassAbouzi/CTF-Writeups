@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+import json
+import hashlib
+import socket
+from typing import List, Tuple
+
+from Crypto.Util.number import long_to_bytes
+from Crypto.Util.Padding import unpad
+from Crypto.Cipher import AES
+
+p = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
+n = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551
+a = (p - 3) % p
+b = int("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
+Gx = int("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296", 16)
+Gy = int("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5", 16)
+G = (Gx, Gy)
+POLY_COMP = 0x87
+MASK_128 = (1 << 128) - 1
+
+
+def modinv(x: int, mod: int) -> int:
+    return pow(x, -1, mod)
+
+def point_add(P: Tuple[int, int], Q: Tuple[int, int]):
+    if P is None:
+        return Q
+    if Q is None:
+        return P
+    x1, y1 = P
+    x2, y2 = Q
+    if x1 == x2:
+        if (y1 + y2) % p == 0:
+            return None
+        return point_double(P)
+    lam = ((y2 - y1) * modinv((x2 - x1) % p, p)) % p
+    x3 = (lam * lam - x1 - x2) % p
+    y3 = (lam * (x1 - x3) - y1) % p
+    return (x3, y3)
+
+def point_double(P: Tuple[int, int]):
+    if P is None:
+        return None
+    x, y = P
+    if y == 0:
+        return None
+    lam = ((3 * x * x + a) * modinv((2 * y) % p, p)) % p
+    x3 = (lam * lam - 2 * x) % p
+    y3 = (lam * (x - x3) - y) % p
+    return (x3, y3)
+
+def point_neg(P: Tuple[int, int]):
+    if P is None:
+        return None
+    x, y = P
+    return (x, (-y) % p)
+
+def point_sub(P, Q):
+    return point_add(P, point_neg(Q))
+
+def scalar_mul(k: int, P: Tuple[int, int]):
+    if P is None or k % n == 0:
+        return None
+    k %= n
+    result = None
+    addend = P
+    while k:
+        if k & 1:
+            result = point_add(result, addend)
+        addend = point_double(addend)
+        k >>= 1
+    return result
+
+def bit_reverse_128(x: int) -> int:
+    x = ((x & 0x55555555555555555555555555555555) << 1) | ((x >> 1) & 0x55555555555555555555555555555555)
+    x = ((x & 0x33333333333333333333333333333333) << 2) | ((x >> 2) & 0x33333333333333333333333333333333)
+    x = ((x & 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f) << 4) | ((x >> 4) & 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f)
+    x = ((x & 0x00ff00ff00ff00ff00ff00ff00ff00ff) << 8) | ((x >> 8) & 0x00ff00ff00ff00ff00ff00ff00ff00ff)
+    x = ((x & 0x0000ffff0000ffff0000ffff0000ffff) << 16) | ((x >> 16) & 0x0000ffff0000ffff0000ffff0000ffff)
+    x = ((x & 0x00000000ffffffff00000000ffffffff) << 32) | ((x >> 32) & 0x00000000ffffffff00000000ffffffff)
+    x = ((x & 0x0000000000000000ffffffffffffffff) << 64) | ((x >> 64) & 0x0000000000000000ffffffffffffffff)
+    return x
+
+def gh_to_std(x: int) -> int:
+    return bit_reverse_128(x)
+
+def std_to_gh(x: int) -> int:
+    return bit_reverse_128(x)
+
+def gf_mul_gh(x: int, y: int) -> int:
+    z = 0
+    v = x
+    for i in range(128):
+        if (y >> (127 - i)) & 1:
+            z ^= v
+        if v & 1:
+            v = (v >> 1) ^ 0xE1000000000000000000000000000000
+        else:
+            v >>= 1
+    return z
+
+def gf_mul_std(a: int, b: int) -> int:
+    res = 0
+    x = a
+    y = b
+    for _ in range(128):
+        if y & 1:
+            res ^= x
+        carry = x & (1 << 127)
+        x = (x << 1) & MASK_128
+        if carry:
+            x ^= POLY_COMP
+        y >>= 1
+    return res
+
+def gf_square_std(x: int) -> int:
+    return gf_mul_std(x, x)
+
+def gf_pow_std(x: int, e: int) -> int:
+    result = 1
+    base = x
+    exponent = e
+    while exponent:
+        if exponent & 1:
+            result = gf_mul_std(result, base)
+        base = gf_square_std(base)
+        exponent >>= 1
+    return result
+
+def gf_inverse_std(x: int) -> int:
+    if x == 0:
+        raise ZeroDivisionError('inverse of zero')
+    return gf_pow_std(x, (1 << 128) - 2)
+
+def gf_sqrt_std(x: int) -> int:
+    return gf_pow_std(x, 1 << 127)
+
+def ghash_eval(H: int, ciphertext: bytes) -> int:
+    g = 0
+    for i in range(0, len(ciphertext), 16):
+        block = int.from_bytes(ciphertext[i:i + 16], 'big')
+        g ^= block
+        g = gf_mul_gh(g, H)
+    len_block = len(ciphertext) * 8
+    g ^= len_block
+    g = gf_mul_gh(g, H)
+    return g
+
+def solve_linear_system(rows: List[int], rhs: List[int], n_vars: int) -> int:
+    rows = rows[:]
+    rhs = rhs[:]
+    n_rows = len(rows)
+    pivots = [-1] * n_rows
+    r = 0
+    for col in range(n_vars):
+        pivot = None
+        for i in range(r, n_rows):
+            if (rows[i] >> col) & 1:
+                pivot = i
+                break
+        if pivot is None:
+            continue
+        rows[r], rows[pivot] = rows[pivot], rows[r]
+        rhs[r], rhs[pivot] = rhs[pivot], rhs[r]
+        for i in range(n_rows):
+            if i != r and ((rows[i] >> col) & 1):
+                rows[i] ^= rows[r]
+                rhs[i] ^= rhs[r]
+        pivots[r] = col
+        r += 1
+        if r == n_rows:
+            break
+    solution = 0
+    for i in range(r - 1, -1, -1):
+        col = pivots[i]
+        if col == -1:
+            if rhs[i]:
+                raise ValueError('Inconsistent system')
+            continue
+        val = rhs[i]
+        mask = rows[i] & ~(1 << col)
+        tmp = mask
+        while tmp:
+            lsb = tmp & -tmp
+            idx = lsb.bit_length() - 1
+            if (solution >> idx) & 1:
+                val ^= 1
+            tmp ^= lsb
+        if val:
+            solution |= 1 << col
+    return solution
+
+def ecdsa_verify(z: int, r: int, s: int, Q) -> bool:
+    if Q is None or r <= 0 or s <= 0 or r >= n or s >= n:
+        return False
+    w = modinv(s, n)
+    u1 = (z * w) % n
+    u2 = (r * w) % n
+    P_res = point_add(scalar_mul(u1, G), scalar_mul(u2, Q))
+    if P_res is None:
+        return False
+    return (P_res[0] % n) == r
+
+def recover_H_S(transcripts: List[Tuple[bytes, bytes]]) -> Tuple[int, int]:
+    (tag1, ct1), (tag2, ct2), (tag3, ct3) = transcripts[:3]
+    c11, c12 = int.from_bytes(ct1[:16], 'big'), int.from_bytes(ct1[16:], 'big')
+    c21, c22 = int.from_bytes(ct2[:16], 'big'), int.from_bytes(ct2[16:], 'big')
+    c31, c32 = int.from_bytes(ct3[:16], 'big'), int.from_bytes(ct3[16:], 'big')
+    t1 = int.from_bytes(tag1, 'big')
+    t2 = int.from_bytes(tag2, 'big')
+    t3 = int.from_bytes(tag3, 'big')
+    A12 = gh_to_std(t1 ^ t2)
+    A13 = gh_to_std(t1 ^ t3)
+    B12 = gh_to_std(c11 ^ c21)
+    B13 = gh_to_std(c11 ^ c31)
+    C12 = gh_to_std(c12 ^ c22)
+    C13 = gh_to_std(c12 ^ c32)
+    E = gf_mul_std(A12, B13) ^ gf_mul_std(A13, B12)
+    F = gf_mul_std(C12, B13) ^ gf_mul_std(C13, B12)
+    H2_std = gf_mul_std(E, gf_inverse_std(F))
+    H_std = gf_sqrt_std(H2_std)
+    H = std_to_gh(H_std)
+    H2 = gf_mul_gh(H, H)
+    H3 = gf_mul_gh(H2, H)
+    len_block = len(ct1) * 8
+    S = t1 ^ gf_mul_gh(c11, H3) ^ gf_mul_gh(c12, H2) ^ gf_mul_gh(len_block, H)
+    return H, S
+
+def compute_tag(H: int, S: int, ciphertext: bytes) -> bytes:
+    g = ghash_eval(H, ciphertext)
+    tag_int = S ^ g
+    return tag_int.to_bytes(16, 'big')
+
+def parse_json_from_text(text: str):
+    idx = text.find('{')
+    if idx == -1:
+        raise ValueError('JSON not found')
+    return json.loads(text[idx:])
+
+class RemoteClient:
+    def __init__(self, host: str, port: int):
+        self.sock = socket.create_connection((host, port))
+        self.buffer = b''
+
+    def recvuntil(self, marker: bytes) -> bytes:
+        while marker not in self.buffer:
+            data = self.sock.recv(4096)
+            if not data:
+                raise ConnectionError('Connection closed')
+            self.buffer += data
+        idx = self.buffer.index(marker) + len(marker)
+        chunk = self.buffer[:idx]
+        self.buffer = self.buffer[idx:]
+        return chunk
+
+    def recvline(self) -> bytes:
+        return self.recvuntil(b'\n')
+
+    def sendline(self, data: bytes) -> None:
+        self.sock.sendall(data + b'\n')
+
+    def close(self):
+        self.sock.close()
+
+def main():
+    host = 'flipper.p2.securinets.tn'
+    port = 6000
+    client = RemoteClient(host, port)
+    banner = client.recvuntil(b'> ')
+    text = banner.decode()
+    lines = [line for line in text.split('\n') if line.strip()]
+    init_data = None
+    for line in lines[::-1]:
+        if '{' in line:
+            init_data = parse_json_from_text(line)
+            break
+    if init_data is None:
+        raise RuntimeError('Failed to parse initial data')
+    print('initial response parsed', flush=True)
+    signkey_initial = bytes.fromhex(init_data['signkey'])
+    ciphertext_len = len(signkey_initial) - 16
+    ct_initial = signkey_initial[16:]
+    tag_initial = signkey_initial[:16]
+    transcripts = [(tag_initial, ct_initial)]
+    pubkeys = [(int(init_data['pubkey']['x'], 16), int(init_data['pubkey']['y'], 16))]
+
+    def recv_json_response():
+        while True:
+            line = client.recvline().decode()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if '"pubkey"' in stripped and '"signkey"' in stripped:
+                return json.loads(stripped)
+
+    for _ in range(2):
+        payload = json.dumps({'option': 'generate_key'}).encode()
+        client.sendline(payload)
+        _ = client.recvline()
+        data = recv_json_response()
+        signkey = bytes.fromhex(data['signkey'])
+        tag = signkey[:16]
+        ct = signkey[16:]
+        transcripts.append((tag, ct))
+        pubkeys.append((int(data['pubkey']['x'], 16), int(data['pubkey']['y'], 16)))
+        client.recvuntil(b'> ')
+    print('collected transcripts', len(transcripts), flush=True)
+
+    H, S = recover_H_S(transcripts)
+    print('recovered H and S', flush=True)
+
+    for idx, (tag_bytes, ct_bytes) in enumerate(transcripts):
+        predicted_tag = compute_tag(H, S, ct_bytes)
+        if predicted_tag != tag_bytes:
+            raise RuntimeError('Tag mismatch on transcript {}'.format(idx))
+    print('transcripts verified', flush=True)
+
+    sign_msg = bytes.fromhex('414141')
+    msg_hash = int(hashlib.sha256(sign_msg).hexdigest(), 16)
+
+    def send_sign(ciphertext: bytes):
+        signkey_bytes = compute_tag(H, S, ciphertext) + ciphertext
+        payload = json.dumps({
+            'option': 'sign',
+            'msg': sign_msg.hex(),
+            'signkey': signkey_bytes.hex(),
+        }).encode()
+        print('sign query', len(ciphertext), flush=True)
+        client.sendline(payload)
+        while True:
+            line = client.recvline().decode().strip()
+            if not line:
+                continue
+            if line.startswith('{') and '"r"' in line:
+                data = json.loads(line)
+                break
+        client.recvuntil(b'> ')
+        return int(data['r'], 16), int(data['s'], 16)
+
+    target_index = len(transcripts) - 1
+    base_pub = pubkeys[target_index]
+    ct_target = transcripts[target_index][1]
+
+    ks_bits = 0
+    for bit in range(ciphertext_len * 8):
+        delta = (1 << bit).to_bytes(ciphertext_len, 'big')
+        mod_ct = bytes(a ^ b for a, b in zip(ct_target, delta))
+        print('bit', bit, flush=True)
+        r, s = send_sign(mod_ct)
+        delta_point = scalar_mul(1 << bit, G)
+        plus = point_add(base_pub, delta_point)
+        minus = point_sub(base_pub, delta_point)
+        verified_plus = ecdsa_verify(msg_hash, r, s, plus)
+        verified_minus = ecdsa_verify(msg_hash, r, s, minus)
+        if verified_plus and not verified_minus:
+            pass
+        elif verified_minus and not verified_plus:
+            ks_bits |= 1 << bit
+        elif verified_plus and verified_minus:
+            raise RuntimeError(f'Ambiguous verification for bit {bit}')
+        else:
+            raise RuntimeError(f'No valid verification for bit {bit}')
+
+    priv_bytes = ks_bits.to_bytes(ciphertext_len, 'big')
+    priv_int = int.from_bytes(priv_bytes, 'big')
+
+    if scalar_mul(priv_int, G) != base_pub:
+        raise RuntimeError('Recovered privkey does not match public key')
+    print('private key recovered', flush=True)
+
+    key_flag = hashlib.sha256(long_to_bytes(priv_int)).digest()[:16]
+
+    payload = json.dumps({'option': 'get_flag'}).encode()
+    client.sendline(payload)
+    flag_data = None
+    while True:
+        line = client.recvline().decode().strip()
+        if not line:
+            continue
+        if '"flag"' in line:
+            flag_data = json.loads(line)
+            break
+    flag_enc = bytes.fromhex(flag_data['flag'])
+    try:
+        client.sendline(json.dumps({'option': 'quit'}).encode())
+    except Exception:
+        pass
+
+    cipher = AES.new(key_flag, AES.MODE_ECB)
+    flag = unpad(cipher.decrypt(flag_enc), 16)
+    print(flag.decode())
+
+if __name__ == '__main__':
+    main()
