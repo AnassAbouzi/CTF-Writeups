@@ -1,15 +1,14 @@
----
-title: "Clandescriptorius (Crypto) — Buckeye CTF 2025"
-description: "Chosen-plaintext recovery via keystream collisions from ambiguous (timestamp || block_index) concatenation."
----
+# "Clandescriptorius (Crypto) — Buckeye CTF 2025"
+
+> description: Chosen-plaintext recovery via keystream collisions from ambiguous (timestamp || block_index) concatenation.
 
 ## Overview
 
 The service encrypts data in 16-byte blocks by XORing each plaintext block with a keystream derived from SHA-256. This is stream-cipher style encryption:
 
-[
+$$
 C_i = P_i \oplus KS(\text{timestamp}, i)
-]
+$$
 
 Two things make it breakable:
 
@@ -25,13 +24,13 @@ The `/encrypt` endpoint is a chosen-plaintext oracle, and timestamps are attacke
 For block index `i`:
 
 - Compute a 16-byte keystream block:
-  \[
+  $$
   KS(\text{timestamp}, i) = \text{SHA256}(\text{...} || \text{str(timestamp)} || \text{str(i)})[0:16]
-  \]
+  $$
 - Encrypt:
-  \[
+  $$
   C_i = P_i \oplus KS(\text{timestamp}, i)
-  \]
+  $$
 
 The plaintext is PKCS#7 padded to a multiple of 16 bytes. If the message length is *already* a multiple of 16, PKCS#7 adds a full extra block of padding.
 
@@ -53,9 +52,9 @@ Example collision:
 
 So:
 
-\[
+$$
 KS(-1111,0) = KS(-111,10)
-\]
+$$
 
 This is enough to mount a keystream-reuse attack.
 
@@ -65,41 +64,41 @@ This is enough to mount a keystream-reuse attack.
 
 Let the encrypted flag be produced at `ts_start` and split into blocks:
 
-\[
+$$
 C^{flag}_j = P^{flag}_j \oplus KS(ts\_start, j)
-\]
+$$
 
-Now make an `/encrypt` query at a new timestamp `ts_query` and craft a plaintext whose **block at index `i` equals `C^{flag}_j`**:
+Now make an `/encrypt` query at a new timestamp `ts_query` and craft a plaintext whose **block at index `i` equals `$C^{flag}_j$`**:
 
 - Prefix with `i` blocks of zero bytes: `00…00` (length `16*i`)
-- Then append `C^{flag}_j` as the next 16-byte block
+- Then append `$C^{flag}_j$` as the next 16-byte block
 
 So the queried plaintext block is:
 
-\[
+$$
 P_i = C^{flag}_j
-\]
+$$
 
 The server returns for that block:
 
-\[
+$$
 C_i = P_i \oplus KS(ts\_query, i) = C^{flag}_j \oplus KS(ts\_query, i)
-\]
+$$
 
 If we choose `(ts_query, i)` such that:
 
-\[
+$$
 \text{str}(ts\_query)\,||\,\text{str}(i) = \text{str}(ts\_start)\,||\,\text{str}(j)
 \Rightarrow KS(ts\_query,i)=KS(ts\_start,j)
-\]
+$$
 
 then:
 
-\[
+$$
 C_i = C^{flag}_j \oplus KS(ts\_start,j)
      = (P^{flag}_j \oplus KS(ts\_start,j)) \oplus KS(ts\_start,j)
      = P^{flag}_j
-\]
+$$
 
 **Meaning:** the ciphertext block we get back at position `i` is literally the **plaintext** block of the flag.
 
@@ -119,9 +118,9 @@ Then for flag blocks `j = 0, 1, 2`, one working set of collisions is:
 
 These query timestamps are strictly increasing:
 
-\[
+$$
 -1111 < -111 < -11 < -1
-\]
+$$
 
 so they satisfy the “timestamps must increase” rule.
 
