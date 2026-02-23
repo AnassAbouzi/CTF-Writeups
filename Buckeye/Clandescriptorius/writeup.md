@@ -24,13 +24,11 @@ The `/encrypt` endpoint is a chosen-plaintext oracle, and timestamps are attacke
 For block index `i`:
 
 - Compute a 16-byte keystream block:
-  $
-  KS(\text{timestamp}, i) = \text{SHA256}(\text{...} || \text{str(timestamp)} || \text{str(i)})[0:16]
-  $
+
+  $KS(\text{timestamp}, i) = \text{SHA256}(\text{...} || \text{str(timestamp)} || \text{str(i)})[0:16]$
 - Encrypt:
-  $
-  C_i = P_i \oplus KS(\text{timestamp}, i)
-  $
+
+  $C_i = P_i \oplus KS(\text{timestamp}, i)$
 
 The plaintext is PKCS#7 padded to a multiple of 16 bytes. If the message length is *already* a multiple of 16, PKCS#7 adds a full extra block of padding.
 
@@ -68,10 +66,10 @@ $$
 C^{flag}_j = P^{flag}_j \oplus KS(ts\_start, j)
 $$
 
-Now make an `/encrypt` query at a new timestamp `ts_query` and craft a plaintext whose **block at index `i` equals `$C^{flag}_j$`**:
+Now make an `/encrypt` query at a new timestamp `ts_query` and craft a plaintext whose **block at index `i` equals ` $C^{flag}_j$ `**:
 
 - Prefix with `i` blocks of zero bytes: `00…00` (length `16*i`)
-- Then append `$C^{flag}_j$` as the next 16-byte block
+- Then append ` $C^{flag}_j$ ` as the next 16-byte block
 
 So the queried plaintext block is:
 
