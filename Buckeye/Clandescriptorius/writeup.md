@@ -7,9 +7,9 @@ description: "Chosen-plaintext recovery via keystream collisions from ambiguous 
 
 The service encrypts data in 16-byte blocks by XORing each plaintext block with a keystream derived from SHA-256. This is stream-cipher style encryption:
 
-\[
+[
 C_i = P_i \oplus KS(\text{timestamp}, i)
-\]
+]
 
 Two things make it breakable:
 
