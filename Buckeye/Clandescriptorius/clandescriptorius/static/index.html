@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clandescriptorius</title>
+    <script>
+        async function startSession(timestamp) {
+            const resp = await fetch("/startsession", {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ timestamp }),
+            });
+            return await resp.json();
+        }
+
+        async function encrypt(session_id, data, timestamp) {
+            const resp = await fetch("/encrypt", {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ session_id, data, timestamp }),
+            });
+            return await resp.json();
+        }
+
+        function timestamp() {
+            return (Number(new Date()) / 1000) | 0;
+        }
+
+        function hex(message) {
+            bytes = new TextEncoder().encode(message);
+            let result = "";
+            for (const byte of bytes) {
+                result += byte.toString(16).padStart(2, "0")
+            }
+            return result;
+        }
+
+        async function main() {
+            const time = timestamp();
+            const { session_id, encrypted_flag } = await startSession(time);
+            document.querySelector("#session-id").textContent = `Session ID: ${session_id}`;
+            document.querySelector("#encrypted-flag").textContent = `Encrypted flag (time ${time}): ${encrypted_flag}`;
+
+            document.querySelector("#form").addEventListener("submit", async e => {
+                e.preventDefault();
+
+                const message = document.querySelector("#input").value;
+
+                const time = timestamp();
+                const result = await encrypt(session_id, hex(message), time);
+
+                if ("encrypted" in result) {
+                    document.querySelector("#output").textContent = `Encrypted (time ${time}): ${result.encrypted}`;
+                } else {
+                    document.querySelector("#output").textContent = `Error: ${result.detail}`;
+                }
+            });
+        }
+
+        main()
+    </script>
+</head>
+
+<body bgcolor="#000000" background="bg_stars.gif" text="#ffff00">
+    <h1>
+        <marquee width="300">CLANDESCRIPTORIUS</marquee>
+    </h1>
+
+
+    <h2>ENCRYPT</h2>
+    <div id="session-id"></div>
+    <div id="encrypted-flag"></div>
+
+    <br>
+
+    <form id="form">
+        <label>Message: <input id="input"></label>
+        <button type="submit">Submit</button>
+    </form>
+
+    <div id="output"></div>
+
+    <h2>DECRYPT</h2>
+    <img src="/underconstruction.gif">
+</body>
+
+</html>
